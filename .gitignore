@@ -1,0 +1,23 @@
+# Byte-code files
+*.pyc
+__pycache__/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Editor-specific files
+.vscode/
+.idea/
+
+# Test results
+.pytest_cache/
+.coverage
+
+# Distribution / packaging
+dist/
+*.egg-info/
+
+# MyPy cache
+.mypy_cache/
