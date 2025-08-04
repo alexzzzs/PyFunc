@@ -565,49 +565,57 @@ class Pipeline(Generic[T]):
         executable_key = self._unwrap(key)
         def _group_by_func(val: Any) -> dict[Any, list[T]]:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
-                grouped: dict[Any, list[Any]] = {}
+                groups: dict[Any, list[T]] = {}
                 for item in val:
-                    k = executable_key(item)
-                    if k not in grouped:
-                        grouped[k] = []
-                    grouped[k].append(item)
-                return grouped
+                    group_key = executable_key(item)
+                    if group_key not in groups:
+                        groups[group_key] = []
+                    groups[group_key].append(item)
+                return groups
             else:
                 raise PipelineError("group_by() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _group_by_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
+    # --- Conversion Methods ---
+
     def to_list(self) -> list[Any]:
-        """Force evaluation of the pipeline and return the result as a list."""
+        """Convert the pipeline result to a list."""
         result = self.get()
         if isinstance(result, Iterable) and not isinstance(result, (str, bytes)):
             return list(result)
-        return [result]
+        else:
+            return [result]
 
-    # --- String Manipulation ---
+    # --- String Methods ---
 
-    def explode(self, delimiter: str) -> 'Pipeline[list[str]]':
-        """Split a string by the given delimiter."""
-        def _explode_func(val: Any) -> list[str]:
+    def explode(self, delimiter: Optional[str] = None) -> 'Pipeline[Generator[str, None, None]]':
+        """Split a string into characters or words."""
+        def _explode_func(val: Any) -> Generator[str, None, None]:
             if isinstance(val, str):
-                return val.split(delimiter)
+                if delimiter is None:
+                    # Split into characters
+                    yield from val
+                else:
+                    # Split by delimiter
+                    yield from val.split(delimiter)
             else:
                 raise PipelineError("explode() can only be used on strings.")
         new_pipeline_func = lambda x: _explode_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
-    def implode(self, delimiter: str) -> 'Pipeline[str]':
-        """Join a list of strings with the given delimiter."""
+    def implode(self, separator: str = "") -> 'Pipeline[str]':
+        """Join an iterable of strings into a single string."""
         def _implode_func(val: Any) -> str:
-            if isinstance(val, list) and all(isinstance(i, str) for i in val):
-                return delimiter.join(val)
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                return separator.join(str(item) for item in val)
             else:
-                raise PipelineError("implode() can only be used on lists of strings.")
+                raise PipelineError("implode() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _implode_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
     def surround(self, prefix: str, suffix: str) -> 'Pipeline[str]':
-        """Wrap the string with a prefix and suffix."""
+        """Surround a string with prefix and suffix."""
         def _surround_func(val: Any) -> str:
             if isinstance(val, str):
                 return f"{prefix}{val}{suffix}"
@@ -616,50 +624,20 @@ class Pipeline(Generic[T]):
         new_pipeline_func = lambda x: _surround_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
-    def template_fill(self, data: dict[str, Any]) -> 'Pipeline[str]':
-        """Apply string templating from a key-value map."""
+    def template_fill(self, values: dict[str, Any]) -> 'Pipeline[str]':
+        """Fill a template string with values using format()."""
         def _template_fill_func(val: Any) -> str:
             if isinstance(val, str):
-                return val.format(**data)
+                return val.format(**values)
             else:
                 raise PipelineError("template_fill() can only be used on strings.")
         new_pipeline_func = lambda x: _template_fill_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
-    # --- Other Methods ---
-    def tap(self, func: Callable[[Any], Any]) -> 'Pipeline[T]':
-        """Run func(self.value) for side effects, do not change value."""
-        executable = self._unwrap(func)
-        new_pipeline_func = lambda x: (executable(self._pipeline_func(x)), self._pipeline_func(x))[1] # Execute for side effect, return original
-        return Pipeline(self._initial_value, new_pipeline_func)
-
-    def do(self, func: Callable[[Any], Any]) -> 'Pipeline[T]':
-        """Alias for tap method for explicit side effects."""
-        return self.tap(func)
-
-    def debug(self) -> 'Pipeline[T]':
-        """Prints the current value of the pipeline for debugging purposes."""
-        def _debug_func(val: Any) -> Any:
-            print(f"DEBUG: {val}")
-            return val
-        new_pipeline_func = lambda x: _debug_func(self._pipeline_func(x))
-        return Pipeline(self._initial_value, new_pipeline_func)
-
-    def trace(self, label: str) -> 'Pipeline[T]':
-        """Prints the current value of the pipeline with a custom label for tracing."""
-        def _trace_func(val: Any) -> Any:
-            print(f"TRACE [{label}]: {val}")
-            return val
-        new_pipeline_func = lambda x: _trace_func(self._pipeline_func(x))
-        return Pipeline(self._initial_value, new_pipeline_func)
-
-    def tee(self) -> tuple['Pipeline[T]', 'Pipeline[T]']:
-        """Duplicate the current pipeline into two independent pipelines."""
-        # Tee returns two new pipelines, both with the same initial value and accumulated function
-        return self.clone(), self.clone()
+    # --- Dictionary Methods ---
 
     def with_items(self) -> 'Pipeline[Generator[tuple[Any, Any], None, None]]':
-        """Convert a dictionary into a list of key-value pairs."""
+        """Convert a dictionary to an iterable of (key, value) pairs."""
         def _with_items_func(val: Any) -> Generator[tuple[Any, Any], None, None]:
             if isinstance(val, dict):
                 yield from val.items()
@@ -668,10 +646,21 @@ class Pipeline(Generic[T]):
         new_pipeline_func = lambda x: _with_items_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
-    def map_values(self, func: Callable[[Any], U]) -> 'Pipeline[dict[Any, U]]':
-        """Apply a function to the values of a dictionary."""
+    def map_keys(self, func: Callable[[Any], Any]) -> 'Pipeline[dict[Any, Any]]':
+        """Apply a function to all keys in a dictionary."""
         executable = self._unwrap(func)
-        def _map_values_func(val: Any) -> dict[Any, U]:
+        def _map_keys_func(val: Any) -> dict[Any, Any]:
+            if isinstance(val, dict):
+                return {executable(k): v for k, v in val.items()}
+            else:
+                raise PipelineError("map_keys() can only be used on dictionaries.")
+        new_pipeline_func = lambda x: _map_keys_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def map_values(self, func: Callable[[Any], Any]) -> 'Pipeline[dict[Any, Any]]':
+        """Apply a function to all values in a dictionary."""
+        executable = self._unwrap(func)
+        def _map_values_func(val: Any) -> dict[Any, Any]:
             if isinstance(val, dict):
                 return {k: executable(v) for k, v in val.items()}
             else:
@@ -679,15 +668,32 @@ class Pipeline(Generic[T]):
         new_pipeline_func = lambda x: _map_values_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
-    def assert_(self, predicate: Callable[[Any], bool], message: str = "Assertion failed") -> 'Pipeline[T]':
-        """Throw an error if the predicate fails."""
-        executable = self._unwrap(predicate)
-        def _assert_func(val: Any) -> Any:
-            if not executable(val):
-                raise PipelineError(message)
-            return val # Return value unchanged if assertion passes
-        new_pipeline_func = lambda x: _assert_func(self._pipeline_func(x))
+    # --- Side Effect Methods ---
+
+    def do(self, func: Callable[[Any], Any]) -> 'Pipeline[T]':
+        """Apply a side-effect function without changing the value."""
+        executable = self._unwrap(func)
+        def _do_func(val: Any) -> Any:
+            executable(val)
+            return val
+        new_pipeline_func = lambda x: _do_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
+
+    def tap(self, func: Callable[[Any], Any]) -> 'Pipeline[T]':
+        """Alias for do() - apply a side-effect function without changing the value."""
+        return self.do(func)
+
+    def debug(self, label: str = "DEBUG") -> 'Pipeline[T]':
+        """Print the current value for debugging purposes."""
+        def _debug_func(val: Any) -> Any:
+            print(f"{label}: {val}")
+            return val
+        new_pipeline_func = lambda x: _debug_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def trace(self, label: str) -> 'Pipeline[T]':
+        """Print the current value with a custom label for tracing."""
+        return self.debug(label)
 
     def _unwrap(self, func: Any) -> Callable[[Any], Any]:
         """Unwraps a function or placeholder into an executable callable."""

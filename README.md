@@ -1,210 +1,178 @@
 # PyFunc: Functional Programming Pipeline for Python
 
-PyFunc is a Python library designed to bring functional programming fluency to Python, enabling chainable, composable, lazy, and debuggable operations on various data structures.
+PyFunc is a Python library that brings functional programming fluency to Python, enabling chainable, composable, lazy, and debuggable operations on various data structures.
 
-## Goals
+## ✨ Features
 
-*   Bring true FP fluency to Python (similar to Haskell or Clojure) without leaving Pythonic readability behind.
-*   Allow chainable, composable, lazy, and debuggable operations on any data structure.
-*   Work seamlessly with scalars, iterables, generators, dicts, and side-effectful IO.
-*   Make lambdas almost obsolete with placeholder-based expressions.
-*   Be expressive enough to replace toolz, fn.py, funcy, and even partial pandas pipelines.
+- **🔗 Chainable Operations**: Method chaining for readable data transformations
+- **🎯 Placeholder Syntax**: Use `_` to create lambda-free expressions  
+- **⚡ Lazy Evaluation**: Operations computed only when needed
+- **🔄 Function Composition**: Compose functions with `>>` and `<<` operators
+- **📊 Rich Data Operations**: Works with scalars, lists, dicts, generators
+- **🐛 Built-in Debugging**: Debug and trace pipeline execution
+- **🔧 Extensible**: Register custom types and extend functionality
+- **📝 Type Safe**: Full type hints and generic support
 
-## Core Concepts
+## 🚀 Quick Start
 
-### 1. Pipeline Chaining with `.then()` or `>>`
-
-Every object can be lifted into a pipeline, and transformations are chained:
+```bash
+pip install pyfunc
+```
 
 ```python
 from pyfunc import pipe, _
 
-result = pipe([1, 2, 3, 4]) \
-  .filter(_ > 2) \
-  .map(_ * 10) \
-  .reduce(_ + _)
-# result will be 70
-```
+# Basic pipeline
+result = pipe([1, 2, 3, 4]).filter(_ > 2).map(_ * 10).to_list()
+# Result: [30, 40]
 
-Or as an expression:
+# String processing  
+result = pipe("hello world").explode(" ").map(_.capitalize()).implode(" ").get()
+# Result: "Hello World"
 
-```python
-from pyfunc import pipe
-
-result = pipe("  Hello  ") >> str.strip >> str.lower
-# result will be "hello"
-```
-
-### 2. Placeholder `_` Syntax
-
-A magic `_` is used in lambdaless expressions:
-
-```python
-from pyfunc import pipe, _
-
-result = pipe([1, 2, 3]).map(_ ** 2).filter(_ % 2 == 1).to_list()
-# result will be [1, 9]
-```
-
-### 3. Lazy Evaluation & Streaming
-
-All operations default to lazy, using generators under the hood — but you can `.to_list()` to evaluate:
-
-```python
-from pyfunc import pipe, _
-
-result = pipe(range(1_000_000)).map(_ + 1).filter(_ % 5 == 0).take(10).to_list()
-# result will be [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-```
-
-### 4. Unified Pipe for Scalars & Collections
-
-Even a single number, string, or dict can be lifted and transformed fluently.
-
-```python
-from pyfunc import pipe, _
-
-pipe(10).then(_ * 2).then(str).get()   # '20'
-pipe("Hello").map(str.lower).to_list()    # ['h', 'e', 'l', 'l', 'o']
-pipe({"a": 1, "b": 2}).map_values(_ * 10).get() # {"a": 10, "b": 20}
-```
-
-### 5. Composable Functions with `.compose()`
-
-Functional composition as first-class citizens:
-
-```python
-from pyfunc import pipe, _
-
+# Function composition
 double = _ * 2
 square = _ ** 2
-pipeline_func = pipe.compose(square, double)
+composed = double >> square  # square(double(x))
 
-pipeline_func(3)  # (3 * 2) ** 2 = 36
+result = pipe(5).apply(composed).get()
+# Result: 100
 ```
 
-Also supports reverse composition (`>>` and `<<`):
+## 🎯 Core Concepts
+
+### Pipeline Chaining
+
+Every value can be lifted into a pipeline for transformation:
+
+```python
+from pyfunc import pipe, _
+
+# Numbers
+pipe([1, 2, 3, 4]).filter(_ > 2).map(_ ** 2).sum().get()
+# Result: 25
+
+# Strings  
+pipe("  hello world  ").apply(_.strip().title()).explode(" ").to_list()
+# Result: ['Hello', 'World']
+
+# Dictionaries
+pipe({"a": 1, "b": 2}).map_values(_ * 10).get()
+# Result: {"a": 10, "b": 20}
+```
+
+### Placeholder Syntax
+
+The `_` placeholder creates reusable, composable expressions:
 
 ```python
 from pyfunc import _
 
-f = (_ * 2) >> (_ ** 2) # square(double(x))
-# f(3) will be 36
+# Arithmetic operations
+double = _ * 2
+add_ten = _ + 10
+
+# Method calls
+normalize = _.strip().lower()
+
+# Comparisons  
+is_positive = _ > 0
+
+# Composition
+process = double >> add_ten  # add_ten(double(x))
 ```
 
-### 6. Control Flow Primitives
+### Lazy Evaluation
 
-Chainable conditionals and partials:
+Operations are lazy by default - perfect for large datasets:
 
 ```python
-from pyfunc import pipe, _
-
-pipe(10).when(_ > 5, _ * 2).unless(_ < 5, _ + 1).get()
-# result will be 20
-
-pipe(3).if_else(_ > 5, _ * 2, _ + 1).get()
-# result will be 4
+# Processes only what's needed from 1 million items
+result = pipe(range(1_000_000)).filter(_ > 500_000).take(5).to_list()
 ```
 
-### 7. Debug and Trace
+## 📚 Rich API
 
-Built-in `.debug()` to inspect intermediate states:
-
+### String Operations
 ```python
-from pyfunc import pipe, _
+pipe("hello,world").explode(",").map(_.capitalize()).implode(" & ").get()
+# "Hello & World"
 
-pipe(range(5)).map(_ + 1).debug().filter(_ % 2 == 0).to_list()
-# DEBUG: <generator object Pipeline.map.<locals>._map_func at 0x...>
-# result will be [2, 4]
+pipe("Hello {name}!").template_fill({"name": "PyFunc"}).get()  
+# "Hello PyFunc!"
 ```
 
-You can also do `.trace("stage 1")` to label steps.
-
-### 8. Advanced Transformations
-
-Includes:
-
-*   `.chunk(n)`
-*   `.unique()`
-*   `.flatten(depth=1)`
-*   `.group_by(key)`
-*   `.zip_with(other)`
-*   `.window(size, step)`
-*   `.sliding_pairs()`
-*   `.product(), .combinations()`
-*   `.take(n)`
-*   `.skip(n)`
-*   `.take_while(predicate)`
-*   `.skip_while(predicate)`
-*   `.first()`
-*   `.last()`
-*   `.nth(n)`
-*   `.is_empty()`
-*   `.count()`
-*   `.sum()`
-*   `.min()`
-*   `.max()`
-*   `.reverse()`
-
-### 9. Optional Static Typing
-
-Gradual typing using `Protocol`, `TypeVar`, and `Generic`. Auto-inferred return types where possible.
-
-### 10. Side Effects Are Explicit
-
-Use `.do()` or `.tap()` to apply side-effectful functions:
-
+### Dictionary Operations
 ```python
-from pyfunc import pipe
-
-pipe(range(3)).do(print).to_list()
-# 0
-# 1
-# 2
-# result will be [0, 1, 2]
+users = {"alice": 25, "bob": 30}
+pipe(users).map_values(_ + 5).map_keys(_.title()).get()
+# {"Alice": 30, "Bob": 35}
 ```
 
-## Example: Real Use Case
-
+### Advanced Transformations
 ```python
-from pyfunc import pipe, _
+# Group by
+data = [{"name": "Alice", "dept": "Eng"}, {"name": "Bob", "dept": "Sales"}]
+pipe(data).group_by(_["dept"]).get()
 
-names = pipe([" Alice ", "BOB", "eve", "Charlie  "]) \
-    .map(_.strip().capitalize()) \
-    .filter(len(_) > 3) \
-    .sort() \
+# Sliding windows
+pipe([1, 2, 3, 4, 5]).window(3).to_list()
+# [[1, 2, 3], [2, 3, 4], [3, 4, 5]]
+
+# Combinations
+pipe([1, 2, 3]).combinations(2).to_list()  
+# [(1, 2), (1, 3), (2, 3)]
+```
+
+### Side Effects & Debugging
+```python
+pipe([1, 2, 3, 4])
+    .debug("Input")
+    .filter(_ > 2) 
+    .debug("Filtered")
+    .map(_ ** 2)
     .to_list()
-
-# ['Alice', 'Charlie']
 ```
 
-Or with `.compose()`:
+## 🌟 Real-World Example
 
 ```python
 from pyfunc import pipe, _
 
-clean_name = pipe.compose(_.strip(), _.capitalize())
-pipe([" alice ", "bob"]).map(clean_name).to_list()
-# ['Alice', 'Bob']
+# Process user data
+users = [
+    {"name": "  Alice  ", "age": 30, "scores": [85, 92, 78]},
+    {"name": "BOB", "age": 25, "scores": [90, 88, 95]},
+    {"name": "charlie", "age": 35, "scores": [75, 80, 85]},
+]
+
+top_performers = (
+    pipe(users)
+    .map(lambda user: {
+        "name": pipe(user["name"]).apply(_.strip().title()).get(),
+        "age": user["age"], 
+        "avg_score": pipe(user["scores"]).sum().get() / len(user["scores"])
+    })
+    .filter(lambda user: user["avg_score"] > 80)
+    .sort(key=lambda user: user["avg_score"], reverse=True)
+    .to_list()
+)
+
+print(top_performers)
+# [{'name': 'Bob', 'age': 25, 'avg_score': 91.0}, 
+#  {'name': 'Alice', 'age': 30, 'avg_score': 85.0}]
 ```
 
-## Extensibility
+## 📖 Documentation
 
-*   **`Pipeline.register_custom_type()`**: Supports registering custom type handlers for specific operations.
-*   **`Pipeline.extend()`**: Allows users to extend the `Pipeline` class with new methods.
+- **[Complete Documentation](DOCUMENTATION.md)** - Full API reference and examples
+- **[Examples](examples/)** - Real-world usage examples  
+- **[Changelog](CHANGELOG.md)** - Version history and updates
 
-## Installation (Coming Soon)
+## 🤝 Contributing
 
-Installation instructions will be provided here once the package is published.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-## Usage (Coming Soon)
+## 📄 License
 
-More detailed usage examples will be provided here.
-
-## Contributing
-
-Contributions are welcome! Please refer to the [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.

@@ -122,6 +122,21 @@ class Placeholder:
             else:
                 return lambda a, b: op_func(a, other_operand) # a is left, other_operand is right
 
+    # Function composition operators
+    def __rshift__(self, other: 'Placeholder') -> 'Placeholder':
+        """Function composition: f >> g means g(f(x))"""
+        if isinstance(other, Placeholder):
+            return Placeholder(func=lambda x: other._func(self._func(x)))
+        else:
+            return Placeholder(func=lambda x: other(self._func(x)))
+
+    def __lshift__(self, other: 'Placeholder') -> 'Placeholder':
+        """Function composition: f << g means f(g(x))"""
+        if isinstance(other, Placeholder):
+            return Placeholder(func=lambda x: self._func(other._func(x)))
+        else:
+            return Placeholder(func=lambda x: self._func(other(x)))
+
 
 
 
