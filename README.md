@@ -16,7 +16,7 @@ PyFunc is a Python library that brings functional programming fluency to Python,
 ## 🚀 Quick Start
 
 ```bash
-pip install pyfunc
+pip install pyfunc-pipeline
 ```
 
 ```python
