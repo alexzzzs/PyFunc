@@ -1,5 +1,54 @@
 # PyFunc Changelog
 
+## Version 0.3.0 - Template Mapping Update
+
+### 🎯 New Features
+
+#### Template Mapping System
+- **Dictionary Template Mapping** - Transform data using dictionary templates with placeholders
+- **String Template Mapping** - Format strings using template syntax with formatting specifiers
+- **Lambda Function Support** - Use lambda functions within dictionary templates for complex logic
+- **Enhanced `.map()` method** - Now supports functions, placeholders, dictionary templates, and string templates
+
+#### Real-World Usage Examples
+```python
+# Dictionary template mapping
+pipe(orders).map({
+    "id": _["id"],
+    "customer": _["customer"],
+    "discounted_total": _["total"] * 0.9,
+    "category": lambda x: "premium" if x["total"] > 1000 else "standard"
+})
+
+# String template mapping
+pipe(users).map("User {name} scored {score:.1f}%")
+
+# Combined pipeline (the exact syntax requested)
+pipe(ecommerce_orders)
+    .filter(_["total"] > 100)
+    .map({"id": _["id"], "customer": _["customer"], "discounted_total": _["total"] * 0.9})
+    .map("Order #{id} for {customer}: ${discounted_total:.2f}")
+    .to_list()
+```
+
+### 🔧 Technical Improvements
+- Enhanced `_unwrap()` method to handle dictionary and string templates
+- Improved error handling for template evaluation
+- Support for formatting specifiers in string templates (e.g., `{value:.2f}`)
+- Safe evaluation context for template expressions
+
+### 📚 Documentation & Examples
+- New comprehensive template mapping section in DOCUMENTATION.md
+- Added `examples/template_mapping_example.py` with real-world scenarios
+- Updated API documentation with template mapping examples
+- Enhanced test coverage (39 tests passing)
+
+### 🧹 Project Maintenance
+- Cleaned up temporary files and build artifacts
+- Removed unnecessary development files
+- Maintained clean project structure
+- Updated documentation to reflect new capabilities
+
 ## Version 0.2.0 - Major Feature Update
 
 ### 🎉 New Features
