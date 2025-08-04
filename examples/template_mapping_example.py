@@ -136,6 +136,12 @@ def main():
     print("• String templates with formatting specifiers")
     print("• Complex data transformations and filtering")
     print("• Real-world data processing scenarios")
+    
+    print("\n⚠️  Common Mistakes to Avoid:")
+    print("• Don't use f-strings: f'Order #{_[\"id\"]}' ❌")
+    print("• Use regular strings: 'Order #{id}' ✅")
+    print("• Template variables must match dictionary keys")
+    print("• Use placeholders (_[\"key\"]) in dictionary templates")
 
 if __name__ == "__main__":
     main()

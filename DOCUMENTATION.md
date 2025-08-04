@@ -470,6 +470,16 @@ result = pipe(users).map("User {name} achieved {score:.1f}% success rate").to_li
 # Result: ["User Alice achieved 95.5% success rate", "User Bob achieved 87.2% success rate"]
 ```
 
+**⚠️ Important:** Use regular string templates, **not f-strings**:
+
+```python
+# ❌ Wrong - Don't use f-strings
+.map(f"Order #{_['id']} for {_['customer']}")  # This will cause an error!
+
+# ✅ Correct - Use regular string templates  
+.map("Order #{id} for {customer}")  # The template system handles the evaluation
+```
+
 #### Combined Template Pipeline
 Chain dictionary and string templates for complex transformations:
 
@@ -764,5 +774,64 @@ result = (pipe([1, 2, 3, 4, 5])
           .debug("After map")
           .to_list())
 ```
+
+## Troubleshooting
+
+### Common Issues
+
+#### "TypeError: unsupported format string passed to Placeholder.__format__"
+
+This error occurs when you use f-strings instead of regular string templates:
+
+```python
+# ❌ Wrong - This causes the error
+pipe(data).map(f"Hello {_['name']}")
+
+# ✅ Correct - Use regular string templates
+pipe(data).map("Hello {name}")
+```
+
+**Why this happens:** F-strings try to evaluate placeholders immediately, but PyFunc's template system needs to evaluate them in the context of each pipeline item.
+
+#### Template Variables Not Found
+
+Make sure your template variables match the keys in your data:
+
+```python
+data = [{"user_name": "Alice", "score": 95}]
+
+# ❌ Wrong - 'name' doesn't exist in the data
+pipe(data).map("Hello {name}")
+
+# ✅ Correct - Use the actual key name
+pipe(data).map("Hello {user_name}")
+
+# ✅ Or transform the data first
+pipe(data).map({"name": _["user_name"], "score": _["score"]}).map("Hello {name}")
+```
+
+#### Dictionary Template Issues
+
+When using dictionary templates, make sure to use placeholders or lambda functions for dynamic values:
+
+```python
+# ❌ Wrong - Static values only
+pipe(data).map({"result": "always the same"})
+
+# ✅ Correct - Use placeholders for dynamic values
+pipe(data).map({"name": _["name"], "doubled_score": _["score"] * 2})
+
+# ✅ Correct - Use lambda functions for complex logic
+pipe(data).map({
+    "name": _["name"],
+    "grade": lambda x: "A" if x["score"] > 90 else "B"
+})
+```
+
+### Performance Tips
+
+- Template mapping is optimized for readability over performance
+- For high-performance scenarios, consider using regular `.map()` with lambda functions
+- Dictionary templates create new dictionaries for each item - use sparingly for large datasets
 
 This comprehensive documentation covers all the features and capabilities of PyFunc. For more examples, see the `examples/` directory in the repository.

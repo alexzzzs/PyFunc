@@ -139,28 +139,38 @@ pipe([1, 2, 3, 4])
 ```python
 from pyfunc import pipe, _
 
-# Process user data
-users = [
-    {"name": "  Alice  ", "age": 30, "scores": [85, 92, 78]},
-    {"name": "BOB", "age": 25, "scores": [90, 88, 95]},
-    {"name": "charlie", "age": 35, "scores": [75, 80, 85]},
+# E-commerce order processing with template mapping
+orders = [
+    {"id": 1, "customer": "Alice", "items": ["laptop", "mouse"], "total": 1200.50},
+    {"id": 2, "customer": "Bob", "items": ["keyboard"], "total": 75.00},
+    {"id": 3, "customer": "Charlie", "items": ["monitor", "stand"], "total": 450.25}
 ]
 
-top_performers = (
-    pipe(users)
-    .map(lambda user: {
-        "name": pipe(user["name"]).apply(_.strip().title()).get(),
-        "age": user["age"], 
-        "avg_score": pipe(user["scores"]).sum().get() / len(user["scores"])
+# Process orders with dictionary and string templates
+result = (
+    pipe(orders)
+    .filter(_["total"] > 100)  # Filter orders > $100
+    .map({
+        "id": _["id"],
+        "customer": _["customer"],
+        "discounted_total": _["total"] * 0.9  # 10% discount
     })
-    .filter(lambda user: user["avg_score"] > 80)
-    .sort(key=lambda user: user["avg_score"], reverse=True)
+    .map("Order #{id} for {customer}: ${discounted_total:.2f}")
     .to_list()
 )
 
-print(top_performers)
-# [{'name': 'Bob', 'age': 25, 'avg_score': 91.0}, 
-#  {'name': 'Alice', 'age': 30, 'avg_score': 85.0}]
+print(result)
+# ['Order #1 for Alice: $1080.45', 'Order #3 for Charlie: $405.23']
+```
+
+### ⚠️ **Important Note**
+Use **regular string templates**, not f-strings:
+```python
+# ❌ Wrong - Don't use f-strings  
+.map(f"Order #{_['id']}")  # This will cause an error!
+
+# ✅ Correct - Use regular string templates
+.map("Order #{id}")  # PyFunc handles the evaluation
 ```
 
 ## 📖 Documentation
