@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Common mistakes and how to fix them in PyFunc template mapping."""
+"""Troubleshooting examples for common PyFunc issues."""
 
 import sys
 import os
@@ -8,105 +8,103 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from pyfunc import pipe, _
 
 def main():
-    print("🔧 PyFunc Troubleshooting Guide")
+    print("🔧 PyFunc Troubleshooting Examples")
     print("=" * 50)
     
-    # Sample data for examples
+    # Sample data
     orders = [
         {"id": 1, "customer": "Alice", "total": 1200.50},
         {"id": 2, "customer": "Bob", "total": 450.25}
     ]
     
-    print("\n1. ❌ Common Mistake: Using f-strings")
+    # 1. F-String Template Issue
+    print("\n1. ❌ Common Mistake: Using F-Strings with Template Mapping")
     print("   This will cause: TypeError: unsupported format string passed to Placeholder.__format__")
     print("   DON'T DO THIS:")
-    print("   # result = pipe(orders).map(f\"Order #{_['id']} for {_['customer']}\")  # ❌ Error!")
+    print("   # result = pipe(orders).map(f\"Order #{_['id']} for {_['customer']}: ${_['total']:.2f}\")")
     
-    print("\n2. ✅ Correct Way: Use regular string templates")
-    result = pipe(orders).map("Order #{id} for {customer}").to_list()
-    print("   Code: pipe(orders).map(\"Order #{id} for {customer}\")")
+    print("\n   ✅ Correct Way: Use Regular String Templates")
+    result = (pipe(orders)
+              .map("Order #{id} for {customer}: ${total:.2f}")
+              .to_list())
+    
     print("   Result:")
     for line in result:
         print(f"     {line}")
     
-    print("\n3. ❌ Common Mistake: Wrong template variable names")
-    print("   This will show empty or cause errors if keys don't match")
-    # Example of what NOT to do:
-    # result = pipe(orders).map("Hello {name}")  # ❌ 'name' doesn't exist
+    # 2. Dictionary Template with F-String Issue
+    print("\n2. ❌ Another Common Mistake: F-Strings in Dictionary Templates")
+    print("   This will also fail:")
+    print("   # pipe(orders).map({\"formatted\": f\"Order #{_['id']}\"})  # DON'T DO THIS")
     
-    print("\n4. ✅ Correct Way: Match your data structure")
-    result = pipe(orders).map("Customer: {customer}, Total: ${total:.2f}").to_list()
-    print("   Code: pipe(orders).map(\"Customer: {customer}, Total: ${total:.2f}\")")
-    print("   Result:")
-    for line in result:
-        print(f"     {line}")
-    
-    print("\n5. ✅ Transform data first if needed")
+    print("\n   ✅ Correct Way: Use Lambda Functions for Complex Logic")
     result = (pipe(orders)
-              .map({"name": _["customer"], "amount": _["total"]})  # Transform keys
-              .map("Hello {name}, you owe ${amount:.2f}")
-              .to_list())
-    print("   Code: Transform keys first, then use in template")
-    print("   Result:")
-    for line in result:
-        print(f"     {line}")
-    
-    print("\n6. ✅ Dictionary templates with complex logic")
-    result = (pipe(orders)
-              .map({
-                  "customer": _["customer"],
-                  "total": _["total"],
-                  "category": lambda x: "Premium" if x["total"] > 1000 else "Standard",
-                  "discount": lambda x: x["total"] * 0.1 if x["total"] > 1000 else 0
-              })
-              .to_list())
-    
-    print("   Dictionary template with lambda functions:")
-    for order in result:
-        print(f"     {order}")
-    
-    print("\n7. ✅ Chaining dictionary and string templates")
-    result = (pipe(orders)
-              .map({
-                  "customer": _["customer"],
-                  "total": _["total"],
-                  "discounted": _["total"] * 0.9
-              })
-              .map("{customer}: ${total:.2f} → ${discounted:.2f} (10% off)")
-              .to_list())
-    
-    print("   Chained templates:")
-    for line in result:
-        print(f"     {line}")
-    
-    print("\n📝 Key Takeaways:")
-    print("• Use regular strings, not f-strings for templates")
-    print("• Template variable names must match dictionary keys")
-    print("• Use placeholders (_[\"key\"]) in dictionary templates")
-    print("• Use lambda functions for complex logic in dictionary templates")
-    print("• Chain dictionary and string templates for powerful transformations")
-    
-    print("\n✅ Your original example (corrected):")
-    ecommerce_orders = [
-        {"id": 1, "customer": "Alice", "items": ["laptop", "mouse"], "total": 1200.50},
-        {"id": 2, "customer": "Bob", "items": ["keyboard"], "total": 75.00},
-        {"id": 3, "customer": "Charlie", "items": ["monitor", "stand"], "total": 450.25},
-        {"id": 4, "customer": "Diana", "items": ["desk", "chair"], "total": 95.00}
-    ]
-    
-    result = (pipe(ecommerce_orders)
-              .filter(_["total"] > 100)
               .map({
                   "id": _["id"],
                   "customer": _["customer"],
-                  "discounted_total": _["total"] * 0.9
+                  "formatted": lambda x: f"Order #{x['id']} for {x['customer']}"  # Lambda is OK
               })
-              .map("Order #{id} for {customer}: ${discounted_total:.2f}")  # ← No 'f' here!
               .to_list())
     
-    print("   Final result:")
+    print("   Result:")
+    for item in result:
+        print(f"     {item}")
+    
+    # 3. Correct Template Mapping Examples
+    print("\n3. ✅ Correct Template Mapping Patterns")
+    
+    # Simple string template
+    print("\n   a) Simple String Template:")
+    result = pipe(orders).map("Customer: {customer}, Total: ${total:.2f}").to_list()
+    for line in result:
+        print(f"      {line}")
+    
+    # Dictionary template with placeholders
+    print("\n   b) Dictionary Template with Placeholders:")
+    result = (pipe(orders)
+              .map({
+                  "order_id": _["id"],
+                  "customer_name": _["customer"],
+                  "discounted_total": _["total"] * 0.9
+              })
+              .to_list())
+    for item in result:
+        print(f"      {item}")
+    
+    # Dictionary template with lambda functions
+    print("\n   c) Dictionary Template with Lambda Functions:")
+    result = (pipe(orders)
+              .map({
+                  "id": _["id"],
+                  "customer": _["customer"],
+                  "category": lambda x: "Premium" if x["total"] > 1000 else "Standard",
+                  "tax": lambda x: x["total"] * 0.08
+              })
+              .to_list())
+    for item in result:
+        print(f"      {item}")
+    
+    # 4. Chaining Templates
+    print("\n4. ✅ Chaining Dictionary and String Templates")
+    result = (pipe(orders)
+              .map({
+                  "id": _["id"],
+                  "customer": _["customer"],
+                  "discounted": _["total"] * 0.9
+              })
+              .map("Order #{id}: {customer} pays ${discounted:.2f}")
+              .to_list())
+    
+    print("   Chained result:")
     for line in result:
         print(f"     {line}")
+    
+    print("\n🎯 Key Takeaways:")
+    print("• Never use f-strings (f\"...\") with template mapping")
+    print("• Use regular string templates: \"Hello {name}\"")
+    print("• Use lambda functions for complex logic in dictionary templates")
+    print("• Chain dictionary and string templates for powerful transformations")
+    print("• Template mapping works with the data from the previous step in the pipeline")
 
 if __name__ == "__main__":
     main()
