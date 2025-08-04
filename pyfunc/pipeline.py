@@ -701,8 +701,66 @@ class Pipeline(Generic[T]):
             return func._func  # Access the single-argument callable from the placeholder
         elif callable(func):
             return func
+        elif isinstance(func, dict):
+            # Handle dictionary templates with placeholders
+            return self._create_dict_mapper(func)
+        elif isinstance(func, str) and '{' in func:
+            # Handle f-string-like templates
+            return self._create_string_formatter(func)
         else:
             raise PipelineError("Provided object is not callable or a valid placeholder.")
+    
+    def _create_dict_mapper(self, template: dict[str, Any]) -> Callable[[Any], dict[str, Any]]:
+        """Create a function that maps an item to a dictionary using placeholder templates."""
+        def dict_mapper(item: Any) -> dict[str, Any]:
+            result = {}
+            for key, value_template in template.items():
+                if isinstance(value_template, Placeholder):
+                    result[key] = value_template._func(item)
+                elif callable(value_template):
+                    result[key] = value_template(item)
+                else:
+                    result[key] = value_template
+            return result
+        return dict_mapper
+    
+    def _create_string_formatter(self, template: str) -> Callable[[Any], str]:
+        """Create a function that formats a string template using item data."""
+        def string_formatter(item: Any) -> str:
+            # Handle f-string-like syntax by evaluating placeholders
+            import re
+            
+            def replace_placeholder(match):
+                expr = match.group(1)
+                try:
+                    # Create a safe evaluation context with the item
+                    if isinstance(item, dict):
+                        # For dict items, allow direct key access
+                        context = {'_': item, **item}
+                    else:
+                        context = {'_': item}
+                    
+                    # Handle formatting specifiers
+                    if ':' in expr:
+                        expr_part, format_spec = expr.rsplit(':', 1)
+                        result = eval(expr_part, {"__builtins__": {}}, context)
+                        return f"{result:{format_spec}}"
+                    else:
+                        # Evaluate the expression
+                        result = eval(expr, {"__builtins__": {}}, context)
+                        return str(result)
+                        
+                except Exception as e:
+                    # If evaluation fails, try simple key lookup for dict items
+                    if isinstance(item, dict) and expr in item:
+                        return str(item[expr])
+                    return match.group(0)  # Return original if evaluation fails
+            
+            # Replace {expression} patterns
+            formatted = re.sub(r'\{([^}]+)\}', replace_placeholder, template)
+            return formatted
+        
+        return string_formatter
 
     def __call__(self, value: T) -> Any:
         """Make the pipeline callable with an input value."""

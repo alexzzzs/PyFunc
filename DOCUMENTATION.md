@@ -164,11 +164,24 @@ pipe("hello").then(_.upper()).get()   # "HELLO"
 ```
 
 #### `.map(func)`
-Apply a function to each element in an iterable.
+Apply a function to each element in an iterable. Supports functions, placeholders, dictionary templates, and string templates.
 
 ```python
+# Function mapping
 pipe([1, 2, 3]).map(_ * 2).to_list()  # [2, 4, 6]
 pipe(["a", "b"]).map(_.upper()).to_list()  # ["A", "B"]
+
+# Dictionary template mapping
+pipe([{"name": "Alice", "age": 30}]).map({
+    "name": _["name"],
+    "category": lambda x: "adult" if x["age"] >= 18 else "minor",
+    "age_doubled": _["age"] * 2
+}).to_list()
+# [{"name": "Alice", "category": "adult", "age_doubled": 60}]
+
+# String template mapping
+pipe([{"name": "Alice", "score": 95.5}]).map("{name} scored {score:.1f}%").to_list()
+# ["Alice scored 95.5%"]
 ```
 
 #### `.filter(predicate)`
@@ -419,6 +432,68 @@ Print with custom label.
 pipe(42).trace("Processing").apply(_ * 2).get()
 # Prints: TRACE [Processing]: 42
 # Returns: 84
+```
+
+### Template Mapping
+
+PyFunc supports advanced template mapping for transforming data structures.
+
+#### Dictionary Templates
+Transform objects using dictionary templates with placeholders:
+
+```python
+orders = [
+    {"id": 1, "customer": "Alice", "total": 1200.50},
+    {"id": 2, "customer": "Bob", "total": 450.25}
+]
+
+result = pipe(orders).map({
+    "order_id": _["id"],
+    "customer_name": _["customer"],
+    "discounted_price": _["total"] * 0.9,
+    "category": lambda x: "premium" if x["total"] > 1000 else "standard"
+}).to_list()
+
+# Result: [
+#   {"order_id": 1, "customer_name": "Alice", "discounted_price": 1080.45, "category": "premium"},
+#   {"order_id": 2, "customer_name": "Bob", "discounted_price": 405.23, "category": "standard"}
+# ]
+```
+
+#### String Templates
+Format strings using template syntax:
+
+```python
+users = [{"name": "Alice", "score": 95.5}, {"name": "Bob", "score": 87.2}]
+
+result = pipe(users).map("User {name} achieved {score:.1f}% success rate").to_list()
+# Result: ["User Alice achieved 95.5% success rate", "User Bob achieved 87.2% success rate"]
+```
+
+#### Combined Template Pipeline
+Chain dictionary and string templates for complex transformations:
+
+```python
+ecommerce_orders = [
+    {"id": 1, "customer": "Alice", "items": ["laptop", "mouse"], "total": 1200.50},
+    {"id": 2, "customer": "Bob", "items": ["keyboard"], "total": 75.00},
+    {"id": 3, "customer": "Charlie", "items": ["monitor", "stand"], "total": 450.25}
+]
+
+result = (pipe(ecommerce_orders)
+          .filter(_["total"] > 100)  # Filter orders > $100
+          .map({
+              "id": _["id"],
+              "customer": _["customer"],
+              "discounted_total": _["total"] * 0.9  # 10% discount
+          })
+          .map("Order #{id} for {customer}: ${discounted_total:.2f}")
+          .to_list())
+
+# Result: [
+#   "Order #1 for Alice: $1080.45",
+#   "Order #3 for Charlie: $405.23"
+# ]
 ```
 
 ### Advanced Methods

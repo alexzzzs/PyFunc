@@ -137,5 +137,66 @@ class TestNewFeatures(unittest.TestCase):
         result = pipe(42).to_list()
         self.assertEqual(result, [42])
 
+    def test_dictionary_mapping(self):
+        """Test dictionary template mapping."""
+        data = [
+            {"name": "Alice", "age": 30, "salary": 50000},
+            {"name": "Bob", "age": 25, "salary": 45000}
+        ]
+        
+        result = pipe(data).map({
+            "name": _["name"],
+            "age_group": lambda x: "senior" if x["age"] > 28 else "junior",
+            "annual_bonus": _["salary"] * 0.1
+        }).to_list()
+        
+        expected = [
+            {"name": "Alice", "age_group": "senior", "annual_bonus": 5000.0},
+            {"name": "Bob", "age_group": "junior", "annual_bonus": 4500.0}
+        ]
+        
+        self.assertEqual(result, expected)
+
+    def test_string_template_mapping(self):
+        """Test string template mapping."""
+        data = [
+            {"name": "Alice", "score": 95.5},
+            {"name": "Bob", "score": 87.2}
+        ]
+        
+        result = pipe(data).map("{name} scored {score:.1f}%").to_list()
+        
+        expected = [
+            "Alice scored 95.5%",
+            "Bob scored 87.2%"
+        ]
+        
+        self.assertEqual(result, expected)
+
+    def test_ecommerce_example(self):
+        """Test the complete e-commerce example."""
+        orders = [
+            {"id": 1, "customer": "Alice", "total": 1200.50},
+            {"id": 2, "customer": "Bob", "total": 75.00},
+            {"id": 3, "customer": "Charlie", "total": 450.25}
+        ]
+        
+        result = (pipe(orders)
+                  .filter(_["total"] > 100)
+                  .map({
+                      "id": _["id"],
+                      "customer": _["customer"],
+                      "discounted_total": _["total"] * 0.9
+                  })
+                  .map("Order #{id} for {customer}: ${discounted_total:.2f}")
+                  .to_list())
+        
+        expected = [
+            "Order #1 for Alice: $1080.45",
+            "Order #3 for Charlie: $405.23"
+        ]
+        
+        self.assertEqual(result, expected)
+
 if __name__ == "__main__":
     unittest.main()
