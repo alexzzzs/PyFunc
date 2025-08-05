@@ -1,11 +1,31 @@
 from collections.abc import Iterable, Callable, Generator
 import copy
-from functools import reduce, partial
+from functools import reduce
 import itertools
+import os
 from typing import TypeVar, Generic, Any, Optional, cast, Union
 
 from .errors import PipelineError
 from .placeholder import Placeholder
+from .backends import get_backend
+from .statistics import median, stdev
+from . import bitwise as python_bitwise
+
+# Conditional import for C++ backend
+if os.environ.get('PYFUNC_BUILD_CPP', '1') == '1':
+    try:
+        from . import native_c
+    except ImportError:
+        native_c = None # Set to None if not available
+
+# Conditional import for Go backend
+if os.environ.get('PYFUNC_BUILD_GO', '0') == '1':  # Temporarily disabled
+    try:
+        from . import native_go
+    except ImportError:
+        native_go = None # Set to None if not available
+else:
+    native_go = None
 
 # Define a TypeVar for the value in the Pipeline
 T = TypeVar('T')
@@ -19,7 +39,7 @@ class Pipeline(Generic[T]):
     """
     A chainable functional pipeline for transforming values or iterables.
     Supports chaining, conditional application, operator overloading, and more.
-    """ 
+    """
     _custom_type_handlers: dict[type, dict[str, Callable[[Any], Any]]] = {}
 
     @classmethod
@@ -68,14 +88,51 @@ class Pipeline(Generic[T]):
         return self.apply(func)
 
     def map(self, func: Callable[[Any], U]) -> 'Pipeline[Generator[U, None, None]]':
-        """Alias for apply method to map a function over elements."""
-        executable = self._unwrap(func)
+        """Map a function over elements with optional C++ acceleration."""
         def _map_func(val: Any) -> Generator[U, None, None]:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                # Try C++ backend for supported operations
+                backend = get_backend()
+                try:
+                    if backend.should_use_cpp(val, 'map', func):
+                        yield from backend.execute_map(val, func)
+                        return
+                except Exception:
+                    # Fall back to Python if C++ fails
+                    pass
+                
+                # Python implementation
+                executable = self._unwrap(func)
                 yield from (executable(v) for v in val)
             else:
+                executable = self._unwrap(func)
                 yield executable(val)
         new_pipeline_func = lambda x: _map_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def map_cpp(self, func: Callable[[Any], U]) -> 'Pipeline[Generator[U, None, None]]':
+        """Map a function over elements using C++ backend explicitly."""
+        def _map_cpp_func(val: Any) -> Generator[U, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                if native_c is None:
+                    raise PipelineError("C++ backend not available")
+                
+                # Convert to list if it's a generator
+                val_list = list(val) if hasattr(val, '__iter__') and not isinstance(val, (list, tuple)) else val
+                
+                if not native_c.supports_operation('map', func):
+                    raise PipelineError(f"C++ backend doesn't support this map operation: {func}")
+                
+                if not native_c.supports_data_type(val_list):
+                    raise PipelineError(f"C++ backend doesn't support this data type: {type(val_list)}")
+                
+                try:
+                    yield from native_c.map(val_list, func)
+                except Exception as e:
+                    raise PipelineError(f"C++ backend failed: {e}")
+            else:
+                raise PipelineError("map_cpp() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _map_cpp_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
     def pipe(self, *funcs: Callable[[Any], Any]) -> 'Pipeline[Any]':
@@ -97,21 +154,59 @@ class Pipeline(Generic[T]):
 
     def reduce(self, func: Callable[[Any, Any], U], initializer: Optional[Any] = None) -> 'Pipeline[U]':
         """Apply a function of two arguments cumulatively to the items of an iterable, from left to right, to reduce the iterable to a single value."""
-        executable: Callable[[Any, Any], Any]
-        if isinstance(func, Placeholder):
-            executable = func.as_reducer()
-        else:
-            executable = func # If not a Placeholder, assume it's a regular 2-arg function
-
         def _reduce_func(val: Any) -> U:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
-                if initializer is None:
-                    return reduce(executable, val)
+                # Convert generators/iterators to lists to allow reuse and size checking
+                val_list = list(val)
+                
+                # Try C++ backend for supported operations
+                backend = get_backend()
+                try:
+                    if backend.should_use_cpp(val_list, 'reduce', func):
+                        return backend.execute_reduce(val_list, func, initializer)
+                except Exception:
+                    # Fall back to Python if C++ fails
+                    pass
+
+                # Python implementation
+                executable: Callable[[Any, Any], Any]
+                if isinstance(func, Placeholder):
+                    executable = func.as_reducer()
                 else:
-                    return reduce(executable, val, initializer)
+                    executable = func
+                
+                if initializer is None:
+                    return reduce(executable, val_list)
+                else:
+                    return reduce(executable, val_list, initializer)
             else:
                 raise PipelineError("reduce() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _reduce_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def reduce_cpp(self, func: Callable[[Any, Any], U], initializer: Optional[Any] = None) -> 'Pipeline[U]':
+        """Reduce elements using C++ backend explicitly."""
+        def _reduce_cpp_func(val: Any) -> U:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                if native_c is None:
+                    raise PipelineError("C++ backend not available")
+
+                # Convert to list if it's a generator
+                val_list = list(val) if hasattr(val, '__iter__') and not isinstance(val, (list, tuple)) else val
+
+                if not native_c.supports_operation('reduce', func):
+                    raise PipelineError(f"C++ backend doesn't support this reduce operation: {func}")
+
+                if not native_c.supports_data_type(val_list):
+                    raise PipelineError(f"C++ backend doesn't support this data type: {type(val_list)}")
+
+                try:
+                    return native_c.reduce(val_list, func, initializer)
+                except Exception as e:
+                    raise PipelineError(f"C++ backend failed: {e}")
+            else:
+                raise PipelineError("reduce_cpp() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _reduce_cpp_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
     def reduce_right(self, func: Callable[[Any, Any], U], initializer: Optional[Any] = None) -> 'Pipeline[U]':
@@ -220,16 +315,53 @@ class Pipeline(Generic[T]):
         return Pipeline(self._initial_value, new_pipeline_func)
         
     def filter(self, predicate: Callable[[Any], bool]) -> 'Pipeline[Generator[T, None, None]]':
-        """Filter elements of an iterable based on a predicate."""
-        executable = self._unwrap(predicate)
+        """Filter elements of an iterable based on a predicate with optional C++ acceleration."""
         def _filter_func(val: Any) -> Generator[T, None, None]:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                # Try C++ backend for supported operations
+                backend = get_backend()
+                try:
+                    if backend.should_use_cpp(val, 'filter', predicate):
+                        yield from backend.execute_filter(val, predicate)
+                        return
+                except Exception:
+                    # Fall back to Python if C++ fails
+                    pass
+                
+                # Python implementation
+                executable = self._unwrap(predicate)
                 for v in val:
                     if executable(v):
                         yield v
             else:
                 raise PipelineError("filter() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _filter_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def filter_cpp(self, predicate: Callable[[Any], bool]) -> 'Pipeline[Generator[T, None, None]]':
+        """Filter elements using C++ backend explicitly."""
+        def _filter_cpp_func(val: Any) -> Generator[T, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                backend = get_backend()
+                if backend.cpp_backend is None:
+                    raise PipelineError("C++ backend not available")
+                
+                # Convert to list if it's a generator
+                val_list = list(val) if hasattr(val, '__iter__') and not isinstance(val, (list, tuple)) else val
+                
+                if not backend.cpp_backend.supports_operation('filter', predicate):
+                    raise PipelineError(f"C++ backend doesn't support this filter operation: {predicate}")
+                
+                if not backend.cpp_backend.supports_data_type(val_list):
+                    raise PipelineError(f"C++ backend doesn't support this data type: {type(val_list)}")
+                
+                try:
+                    yield from backend.cpp_backend.filter(val_list, predicate)
+                except Exception as e:
+                    raise PipelineError(f"C++ backend failed: {e}")
+            else:
+                raise PipelineError("filter_cpp() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _filter_cpp_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
     def flatten(self) -> 'Pipeline[Generator[Any, None, None]]':
@@ -402,49 +534,437 @@ class Pipeline(Generic[T]):
         return Pipeline(self._initial_value, new_pipeline_func)
 
     def count(self) -> 'Pipeline[int]':
-        """Count the number of elements in an iterable."""
+        """Count the number of elements in an iterable with optional C++ acceleration."""
         def _count_func(val: Any) -> int:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
-                return sum(1 for _ in val)
+                # Convert generators/iterators to lists to allow reuse and size checking
+                val_list = list(val)
+                
+                # Try C++ backend for supported operations
+                backend = get_backend()
+                try:
+                    if backend.should_use_cpp(val_list, 'count'):
+                        return backend.execute_sum(val_list)
+                except Exception:
+                    # Fall back to Python if C++ fails
+                    pass
+                
+                # Python implementation
+                return len(val_list)
             else:
                 raise PipelineError("count() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _count_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
+    def count_cpp(self) -> 'Pipeline[int]':
+        """Count the number of elements in an iterable using C++ backend explicitly."""
+        def _count_cpp_func(val: Any) -> int:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                if native_c is None:
+                    raise PipelineError("C++ backend not available")
+                
+                # Convert to list if it's a generator
+                val_list = list(val) if hasattr(val, '__iter__') and not isinstance(val, (list, tuple)) else val
+                
+                if not native_c.supports_data_type(val_list):
+                    raise PipelineError(f"C++ backend doesn't support this data type: {type(val_list)}")
+                
+                try:
+                    return native_c.count(val_list)
+                except Exception as e:
+                    raise PipelineError(f"C++ backend failed: {e}")
+            else:
+                raise PipelineError("count_cpp() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _count_cpp_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
     def sum(self) -> 'Pipeline[Union[int, float]]':
-        """Calculate the sum of elements in an iterable."""
+        """Calculate the sum of elements in an iterable with optional backend acceleration."""
         def _sum_func(val: Any) -> Union[int, float]:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
-                return sum(val)
+                val_list = list(val)
+                backend = get_backend()
+                
+                # Try Zig backend for mathematical operations
+                try:
+                    if backend.should_use_zig(val_list, 'sum') and backend.zig_backend:
+                        return backend.zig_backend.sum(val_list)
+                except Exception:
+                    pass
+                
+                # Try C++ backend
+                try:
+                    if backend.should_use_cpp(val_list, 'sum'):
+                        return backend.execute_sum(val_list)
+                except Exception:
+                    pass
+                
+                # Python implementation
+                return sum(val_list)
             else:
                 raise PipelineError("sum() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _sum_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
+    def sum_cpp(self) -> 'Pipeline[Union[int, float]]':
+        """Calculate the sum using C++ backend explicitly."""
+        def _sum_cpp_func(val: Any) -> Union[int, float]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                if native_c is None:
+                    raise PipelineError("C++ backend not available")
+                
+                # Convert to list if it's a generator
+                val_list = list(val) if hasattr(val, '__iter__') and not isinstance(val, (list, tuple)) else val
+                
+                if not native_c.supports_data_type(val_list):
+                    raise PipelineError(f"C++ backend doesn't support this data type: {type(val_list)}")
+                
+                try:
+                    return native_c.sum(val_list)
+                except Exception as e:
+                    raise PipelineError(f"C++ backend failed: {e}")
+            else:
+                raise PipelineError("sum_cpp() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _sum_cpp_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
     def min(self) -> 'Pipeline[Optional[T]]':
-        """Get the minimum element in an iterable."""
+        """Get the minimum element in an iterable with optional C++ acceleration."""
         def _min_func(val: Any) -> Optional[T]:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                # Convert generators/iterators to lists to allow reuse and size checking
+                val_list = list(val)
+                if not val_list:
+                    return None
+                
+                # Try C++ backend for supported operations
+                backend = get_backend()
                 try:
-                    return min(val)
-                except ValueError:
-                    return None # Empty sequence
+                    if backend.should_use_cpp(val_list, 'min'):
+                        return backend.cpp_backend.min(val_list)
+                except Exception:
+                    # Fall back to Python if C++ fails
+                    pass
+                
+                # Python implementation
+                return min(val_list)
             else:
                 raise PipelineError("min() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _min_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
+    def min_cpp(self) -> 'Pipeline[Optional[T]]':
+        """Get the minimum element in an iterable using C++ backend explicitly."""
+        def _min_cpp_func(val: Any) -> Optional[T]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                if native_c is None:
+                    raise PipelineError("C++ backend not available")
+                
+                # Convert to list if it's a generator
+                val_list = list(val) if hasattr(val, '__iter__') and not isinstance(val, (list, tuple)) else val
+                if not val_list:
+                    return None
+                
+                if not native_c.supports_data_type(val_list):
+                    raise PipelineError(f"C++ backend doesn't support this data type: {type(val_list)}")
+                
+                try:
+                    return native_c.min(val_list)
+                except Exception as e:
+                    raise PipelineError(f"C++ backend failed: {e}")
+            else:
+                raise PipelineError("min_cpp() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _min_cpp_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
     def max(self) -> 'Pipeline[Optional[T]]':
-        """Get the maximum element in an iterable."""
+        """Get the maximum element in an iterable with optional C++ acceleration."""
         def _max_func(val: Any) -> Optional[T]:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                # Convert generators/iterators to lists to allow reuse and size checking
+                val_list = list(val)
+                if not val_list:
+                    return None
+                
+                # Try C++ backend for supported operations
+                backend = get_backend()
                 try:
-                    return max(val)
-                except ValueError:
-                    return None # Empty sequence
+                    if backend.should_use_cpp(val_list, 'max'):
+                        return backend.cpp_backend.max(val_list)
+                except Exception:
+                    # Fall back to Python if C++ fails
+                    pass
+                
+                # Python implementation
+                return max(val_list)
             else:
                 raise PipelineError("max() can only be used on iterables (excluding str/bytes).")
         new_pipeline_func = lambda x: _max_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def max_cpp(self) -> 'Pipeline[Optional[T]]':
+        """Get the maximum element in an iterable using C++ backend explicitly."""
+        def _max_cpp_func(val: Any) -> Optional[T]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                if native_c is None:
+                    raise PipelineError("C++ backend not available")
+                
+                # Convert to list if it's a generator
+                val_list = list(val) if hasattr(val, '__iter__') and not isinstance(val, (list, tuple)) else val
+                if not val_list:
+                    return None
+                
+                if not native_c.supports_data_type(val_list):
+                    raise PipelineError(f"C++ backend doesn't support this data type: {type(val_list)}")
+                
+                try:
+                    return native_c.max(val_list)
+                except Exception as e:
+                    raise PipelineError(f"C++ backend failed: {e}")
+            else:
+                raise PipelineError("max_cpp() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _max_cpp_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    # --- Statistical Methods ---
+
+    def median(self) -> 'Pipeline[Union[int, float]]':
+        """Calculate the median of the elements in an iterable with optional Rust acceleration."""
+        def _median_func(val: Any) -> Union[int, float]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                val_list = list(val)
+                
+                # Try Rust backend for large datasets (configurable threshold)
+                backend = get_backend()
+                if backend.should_use_rust(val_list, 'median'):
+                    try:
+                        from . import native_rust
+                        return native_rust.median([float(x) for x in val_list])
+                    except ImportError:
+                        pass  # Fall back to Python
+                
+                # Python implementation for small datasets or when Rust unavailable
+                return median(val_list)
+            else:
+                raise PipelineError("median() can only be used on iterables (excluding str/bytes).")
+        new_pipeline_func = lambda x: _median_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def stdev(self) -> 'Pipeline[float]':
+        """Calculate the standard deviation of the elements in an iterable with optional Rust acceleration."""
+        def _stdev_func(val: Any) -> float:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                val_list = list(val)
+                
+                # Try Rust backend for large datasets (configurable threshold)
+                backend = get_backend()
+                if backend.should_use_rust(val_list, 'stdev'):
+                    try:
+                        from . import native_rust
+                        return native_rust.stdev([float(x) for x in val_list])
+                    except ImportError:
+                        pass  # Fall back to Python
+                
+                # Python implementation for small datasets or when Rust unavailable
+                return stdev(val_list)
+            else:
+                raise PipelineError("stdev() can only be used on iterables (excluding str/bytes).")
+        new_pipeline_func = lambda x: _stdev_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def median_rust(self) -> 'Pipeline[Union[int, float]]':
+        """Calculate the median of the elements in an iterable using Rust."""
+        def _median_rust_func(val: Any) -> Union[int, float]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                try:
+                    from . import native_rust
+                    return native_rust.median(list(val))
+                except ImportError:
+                    raise PipelineError("Rust backend not available. Please compile it first.")
+            else:
+                raise PipelineError("median_rust() can only be used on iterables (excluding str/bytes).")
+        new_pipeline_func = lambda x: _median_rust_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def stdev_rust(self) -> 'Pipeline[float]':
+        """Calculate the standard deviation of the elements in an iterable using Rust."""
+        def _stdev_rust_func(val: Any) -> float:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                try:
+                    from . import native_rust
+                    return native_rust.stdev(list(val))
+                except ImportError:
+                    raise PipelineError("Rust backend not available. Please compile it first.")
+            else:
+                raise PipelineError("stdev_rust() can only be used on iterables (excluding str/bytes).")
+        new_pipeline_func = lambda x: _stdev_rust_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def sum_zig(self) -> 'Pipeline[Union[int, float]]':
+        """Calculate the sum using Zig backend explicitly."""
+        def _sum_zig_func(val: Any) -> Union[int, float]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                backend = get_backend()
+                if backend.zig_backend is None:
+                    raise PipelineError("Zig backend not available")
+                
+                val_list = list(val)
+                if not backend.zig_backend.supports_data_type(val_list):
+                    raise PipelineError(f"Zig backend doesn't support this data type: {type(val_list)}")
+                
+                try:
+                    return backend.zig_backend.sum(val_list)
+                except Exception as e:
+                    raise PipelineError(f"Zig backend failed: {e}")
+            else:
+                raise PipelineError("sum_zig() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _sum_zig_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def mean_zig(self) -> 'Pipeline[float]':
+        """Calculate the mean using Zig backend explicitly."""
+        def _mean_zig_func(val: Any) -> float:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                backend = get_backend()
+                if backend.zig_backend is None:
+                    raise PipelineError("Zig backend not available")
+                
+                val_list = list(val)
+                try:
+                    return backend.zig_backend.mean(val_list)
+                except Exception as e:
+                    raise PipelineError(f"Zig backend failed: {e}")
+            else:
+                raise PipelineError("mean_zig() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _mean_zig_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def stdev_zig(self) -> 'Pipeline[float]':
+        """Calculate the standard deviation using Zig backend explicitly."""
+        def _stdev_zig_func(val: Any) -> float:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                backend = get_backend()
+                if backend.zig_backend is None:
+                    raise PipelineError("Zig backend not available")
+                
+                val_list = list(val)
+                try:
+                    return backend.zig_backend.stdev(val_list)
+                except Exception as e:
+                    raise PipelineError(f"Zig backend failed: {e}")
+            else:
+                raise PipelineError("stdev_zig() can only be used on iterables (excluding str/bytes)")
+        new_pipeline_func = lambda x: _stdev_zig_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    # --- Bitwise Methods ---
+
+    def bitwise_and(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise AND on each element in an iterable with optional Go acceleration."""
+        def _bitwise_and_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                val_list = list(val)
+                backend = get_backend()
+                
+                # Try Go backend for bitwise operations
+                try:
+                    if backend.should_use_go(val_list, 'bitwise_and') and backend.go_backend:
+                        yield from backend.go_backend.bitwise_and(val_list, operand)
+                        return
+                except Exception:
+                    pass
+                
+                # Python implementation fallback
+                yield from python_bitwise.bitwise_and(val_list, operand)
+            else:
+                raise PipelineError("bitwise_and() can only be used on iterables of integers.")
+        new_pipeline_func = lambda x: _bitwise_and_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def bitwise_or(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise OR on each element in an iterable."""
+        def _bitwise_or_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                yield from python_bitwise.bitwise_or(val, operand)
+            else:
+                raise PipelineError("bitwise_or() can only be used on iterables of integers.")
+        new_pipeline_func = lambda x: _bitwise_or_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def bitwise_xor(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise XOR on each element in an iterable."""
+        def _bitwise_xor_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                yield from python_bitwise.bitwise_xor(val, operand)
+            else:
+                raise PipelineError("bitwise_xor() can only be used on iterables of integers.")
+        new_pipeline_func = lambda x: _bitwise_xor_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def bitwise_not(self) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise NOT on each element in an iterable."""
+        def _bitwise_not_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                yield from python_bitwise.bitwise_not(val)
+            else:
+                raise PipelineError("bitwise_not() can only be used on iterables of integers.")
+        new_pipeline_func = lambda x: _bitwise_not_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def left_shift(self, bits: int) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise left shift on each element in an iterable."""
+        def _left_shift_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                yield from python_bitwise.left_shift(val, bits)
+            else:
+                raise PipelineError("left_shift() can only be used on iterables of integers.")
+        new_pipeline_func = lambda x: _left_shift_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def right_shift(self, bits: int) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise right shift on each element in an iterable."""
+        def _right_shift_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                yield from python_bitwise.right_shift(val, bits)
+            else:
+                raise PipelineError("right_shift() can only be used on iterables of integers.")
+        new_pipeline_func = lambda x: _right_shift_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def bitwise_and_go(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise AND using Go backend explicitly."""
+        def _bitwise_and_go_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                backend = get_backend()
+                if backend.go_backend is None:
+                    raise PipelineError("Go backend not available")
+                
+                val_list = list(val)
+                try:
+                    yield from backend.go_backend.bitwise_and(val_list, operand)
+                except Exception as e:
+                    raise PipelineError(f"Go backend failed: {e}")
+            else:
+                raise PipelineError("bitwise_and_go() can only be used on iterables of integers")
+        new_pipeline_func = lambda x: _bitwise_and_go_func(self._pipeline_func(x))
+        return Pipeline(self._initial_value, new_pipeline_func)
+
+    def bitwise_or_go(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+        """Perform a bitwise OR using Go backend explicitly."""
+        def _bitwise_or_go_func(val: Any) -> Generator[int, None, None]:
+            if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                backend = get_backend()
+                if backend.go_backend is None:
+                    raise PipelineError("Go backend not available")
+                
+                val_list = list(val)
+                try:
+                    yield from backend.go_backend.bitwise_or(val_list, operand)
+                except Exception as e:
+                    raise PipelineError(f"Go backend failed: {e}")
+            else:
+                raise PipelineError("bitwise_or_go() can only be used on iterables of integers")
+        new_pipeline_func = lambda x: _bitwise_or_go_func(self._pipeline_func(x))
         return Pipeline(self._initial_value, new_pipeline_func)
 
     def reverse(self) -> 'Pipeline[list[T]]':
@@ -488,7 +1008,7 @@ class Pipeline(Generic[T]):
 
     def skip(self, n: int) -> 'Pipeline[Generator[T, None, None]]':
         """Skip the first n elements from the iterable."""
-        def _skip_func(val: Any) -> Generator[T, None, None]:
+        def _skip_func(val: Any) -> Generator[int, None, None]:
             if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
                 for i, item in enumerate(val):
                     if i >= n:
@@ -786,3 +1306,90 @@ def pipeline(func: Callable[['Pipeline[Any]'], 'Pipeline[Any]']) -> Callable[[An
 def pipe(value: T) -> 'Pipeline[T]':
     """Creates a new Pipeline instance with the given initial value."""
     return Pipeline(initial_value=value)
+
+
+# Only define Go backend methods if native_go is available
+if native_go is not None:
+    class GoBitwiseMethods:
+        def bitwise_and_go(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+            """Perform a bitwise AND on each element in an iterable using Go backend."""
+            def _bitwise_and_go_func(val: Any) -> Generator[int, None, None]:
+                from . import native_go
+                if native_go is None:
+                    raise PipelineError("Go backend not available.")
+                if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                    return native_go.bitwise_and(list(val), operand)
+                else:
+                    raise PipelineError("bitwise_and_go() can only be used on iterables of integers.")
+            new_pipeline_func = lambda x: _bitwise_and_go_func(self._pipeline_func(x))
+            return Pipeline(self._initial_value, new_pipeline_func)
+
+        def bitwise_or_go(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+            """Perform a bitwise OR on each element in an iterable using Go backend."""
+            def _bitwise_or_go_func(val: Any) -> Generator[int, None, None]:
+                from . import native_go
+                if native_go is None:
+                    raise PipelineError("Go backend not available.")
+                if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                    return native_go.bitwise_or(list(val), operand)
+                else:
+                    raise PipelineError("bitwise_or_go() can only be used on iterables of integers.")
+            new_pipeline_func = lambda x: _bitwise_or_go_func(self._pipeline_func(x))
+            return Pipeline(self._initial_value, new_pipeline_func)
+
+        def bitwise_xor_go(self, operand: int) -> 'Pipeline[Generator[int, None, None]]':
+            """Perform a bitwise XOR on each element in an iterable using Go backend."""
+            def _bitwise_xor_go_func(val: Any) -> Generator[int, None, None]:
+                from . import native_go
+                if native_go is None:
+                    raise PipelineError("Go backend not available.")
+                if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                    return native_go.bitwise_xor(list(val), operand)
+                else:
+                    raise PipelineError("bitwise_xor_go() can only be used on iterables of integers.")
+            new_pipeline_func = lambda x: _bitwise_xor_go_func(self._pipeline_func(x))
+            return Pipeline(self._initial_value, new_pipeline_func)
+
+        def bitwise_not_go(self) -> 'Pipeline[Generator[int, None, None]]':
+            """Perform a bitwise NOT on each element in an iterable using Go backend."""
+            def _bitwise_not_go_func(val: Any) -> Generator[int, None, None]:
+                from . import native_go
+                if native_go is None:
+                    raise PipelineError("Go backend not available.")
+                if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                    return native_go.bitwise_not(list(val))
+                else:
+                    raise PipelineError("bitwise_not_go() can only be used on iterables of integers.")
+            new_pipeline_func = lambda x: _bitwise_not_go_func(self._pipeline_func(x))
+            return Pipeline(self._initial_value, new_pipeline_func)
+
+        def left_shift_go(self, bits: int) -> 'Pipeline[Generator[int, None, None]]':
+            """Perform a bitwise left shift on each element in an iterable using Go backend."""
+            def _left_shift_go_func(val: Any) -> Generator[int, None, None]:
+                from . import native_go
+                if native_go is None:
+                    raise PipelineError("Go backend not available.")
+                if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                    return native_go.left_shift(list(val), bits)
+                else:
+                    raise PipelineError("left_shift_go() can only be used on iterables of integers.")
+            new_pipeline_func = lambda x: _left_shift_go_func(self._pipeline_func(x))
+            return Pipeline(self._initial_value, new_pipeline_func)
+
+        def right_shift_go(self, bits: int) -> 'Pipeline[Generator[int, None, None]]':
+            """Perform a bitwise right shift on each element in an iterable using Go backend."""
+            def _right_shift_go_func(val: Any) -> Generator[int, None, None]:
+                from . import native_go
+                if native_go is None:
+                    raise PipelineError("Go backend not available.")
+                if isinstance(val, Iterable) and not isinstance(val, (str, bytes)):
+                    return native_go.right_shift_go(list(val), bits)
+                else:
+                    raise PipelineError("right_shift_go() can only be used on iterables of integers.")
+            new_pipeline_func = lambda x: _right_shift_go_func(self._pipeline_func(x))
+            return Pipeline(self._initial_value, new_pipeline_func)
+
+    # Dynamically add GoBitwiseMethods to Pipeline if native_go is available
+    for name in dir(GoBitwiseMethods):
+        if not name.startswith('_'):
+            setattr(Pipeline, name, getattr(GoBitwiseMethods, name))

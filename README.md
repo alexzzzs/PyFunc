@@ -12,6 +12,12 @@ PyFunc is a Python library that brings functional programming fluency to Python,
 - **🐛 Built-in Debugging**: Debug and trace pipeline execution
 - **🔧 Extensible**: Register custom types and extend functionality
 - **📝 Type Safe**: Full type hints and generic support
+- **🚀 Multi-Backend Performance**: 5 backends for optimal performance
+  - **Python**: Universal compatibility (always available)
+  - **C++**: High-performance general operations
+  - **Rust**: Memory-safe statistical functions  
+  - **Go**: Lightning-fast bitwise operations
+  - **Zig**: Blazing mathematical computations (236x speedup!)
 
 ## 🚀 Quick Start
 
@@ -37,6 +43,32 @@ composed = double >> square  # square(double(x))
 
 result = pipe(5).apply(composed).get()
 # Result: 100
+```
+
+### ⚡ **Performance Backends**
+
+```python
+from pyfunc import pipe, set_zig_threshold, set_go_threshold
+
+# Configure performance backends
+set_zig_threshold(1000)  # Use Zig for math operations ≥ 1000 elements
+set_go_threshold(500)    # Use Go for bitwise operations ≥ 500 elements
+
+# Automatic backend selection
+large_data = list(range(5000))
+result = pipe(large_data).sum().get()  # Uses Zig automatically (blazing fast!)
+
+# Explicit backend control
+result = pipe([1, 2, 3, 4, 5]).sum_zig().get()           # Force Zig
+result = pipe([15, 31, 63]).bitwise_and_go(7).to_list()  # Force Go
+result = pipe([1, 2, 3, 4, 5]).median_rust().get()      # Force Rust
+
+# Batch operations for maximum performance
+from pyfunc.backends import get_backend
+backend = get_backend()
+if backend.zig_backend:
+    stats = backend.zig_backend.batch_statistics([1, 2, 3, 4, 5])
+    # Returns: {'sum': 15.0, 'mean': 3.0, 'min': 1.0, 'max': 5.0, 'stdev': 1.414}
 ```
 
 ## 🎯 Core Concepts
@@ -178,6 +210,32 @@ Use **regular string templates**, not f-strings:
 - **[Complete Documentation](DOCUMENTATION.md)** - Full API reference and examples
 - **[Examples](examples/)** - Real-world usage examples  
 - **[Changelog](CHANGELOG.md)** - Version history and updates
+
+### 🚀 Performance Backends
+
+- **[C++ Backend](CPP_BACKEND.md)** - High-performance general operations
+- **[Zig Backend](ZIG_BACKEND.md)** - Blazing-fast mathematical operations (236x speedup!)
+- **[Rust Backend](examples/rust_threshold_example.py)** - Memory-safe statistical functions
+- **[Go Backend](build_go.py)** - Lightning-fast bitwise operations
+- **[Backend Control Guide](examples/backend_control_guide.py)** - Complete user control examples
+
+### 🔧 **Backend Installation**
+
+```bash
+# Install with all backends (recommended)
+pip install pyfunc-pipeline[all]
+
+# Or install specific backends
+pip install pyfunc-pipeline[cpp]    # C++ backend
+pip install pyfunc-pipeline[zig]    # Zig backend  
+pip install pyfunc-pipeline[rust]   # Rust backend
+pip install pyfunc-pipeline[go]     # Go backend
+
+# Build backends from source
+python build_zig.py    # Build Zig backend
+python build_go.py     # Build Go backend
+python build_cpp.py    # Build C++ backend
+```
 
 ## 🤝 Contributing
 
